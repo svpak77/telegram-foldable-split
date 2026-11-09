@@ -1,0 +1,139 @@
+diff --git a/TMessagesProj/build.gradle b/TMessagesProj/build.gradle
+index 92ff84ea..aa8a0dc5 100644
+--- a/TMessagesProj/build.gradle
++++ b/TMessagesProj/build.gradle
+@@ -297,7 +297,7 @@ task buildNativeDeps(description: 'Build native dependencies.') {
+             println "NDK Directory: ${ndkDir}"
+             println "Working Directory: ${projectDir}/jni"
+             workingDir "${projectDir}/jni"
+-            commandLine 'python3', 'prepare.py', 'silent', 'ndk=' + ndkDir, 'arm', 'arm64'
++            commandLine 'python3', 'prepare.py', 'silent', 'ndk=' + ndkDir, 'arm64'
+         }
+     }
+ }
+diff --git a/TMessagesProj/src/main/java/org/telegram/messenger/AndroidUtilities.java b/TMessagesProj/src/main/java/org/telegram/messenger/AndroidUtilities.java
+index 292741cd..bb60af37 100644
+--- a/TMessagesProj/src/main/java/org/telegram/messenger/AndroidUtilities.java
++++ b/TMessagesProj/src/main/java/org/telegram/messenger/AndroidUtilities.java
+@@ -3130,7 +3130,10 @@ public class AndroidUtilities {
+     }
+ 
+     public static int getTabletLeftFragmentSize(final int fullWidth, final int insetLeft, final int insetRight) {
+-        return insetLeft + Math.max(dp(320), (fullWidth - insetLeft - insetRight) * 35 / 100);
++        final int usable = Math.max(0, fullWidth - insetLeft - insetRight);
++        final int rightMin = Math.min(dp(300), usable / 3);
++        final int wanted = (int) (usable * SharedConfig.tabletSplitFraction);
++        return insetLeft + Math.max(dp(80), Math.min(wanted, usable - rightMin));
+     }
+ 
+     public static int getPhotoSize() {
+diff --git a/TMessagesProj/src/main/java/org/telegram/messenger/SharedConfig.java b/TMessagesProj/src/main/java/org/telegram/messenger/SharedConfig.java
+index 3e950bbd..e4b33cab 100644
+--- a/TMessagesProj/src/main/java/org/telegram/messenger/SharedConfig.java
++++ b/TMessagesProj/src/main/java/org/telegram/messenger/SharedConfig.java
+@@ -280,6 +280,7 @@ public class SharedConfig {
+     public static boolean storiesIntroShown;
+     public static boolean disableVoiceAudioEffects;
+     public static boolean forceDisableTabletMode;
++    public static float tabletSplitFraction = 0.35f;
+     public static boolean updateStickersOrderOnSend = true;
+     public static boolean bigCameraForRound;
+     public static Boolean useCamera2Force;
+@@ -466,6 +467,7 @@ public class SharedConfig {
+                 SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences("userconfing", Context.MODE_PRIVATE);
+                 SharedPreferences.Editor editor = preferences.edit();
+                 editor.putBoolean("saveIncomingPhotos", saveIncomingPhotos);
++                editor.putFloat("tabletSplitFraction", tabletSplitFraction);
+                 editor.putString("passcodeHash1", passcodeHash);
+                 editor.putString("passcodeSalt", passcodeSalt.length > 0 ? Base64.encodeToString(passcodeSalt, Base64.DEFAULT) : "");
+                 editor.putBoolean("appLocked", appLocked);
+@@ -662,6 +664,7 @@ public class SharedConfig {
+             // compact mode is still in development: private beta only
+             compactMode = preferences.getBoolean("compactMode", false);
+             forceDisableTabletMode = preferences.getBoolean("forceDisableTabletMode", false);
++            tabletSplitFraction = preferences.getFloat("tabletSplitFraction", 0.35f);
+             streamAllVideo = preferences.getBoolean("streamAllVideo", BuildVars.DEBUG_VERSION);
+             streamMkv = preferences.getBoolean("streamMkv", false);
+             suggestStickers = preferences.getInt("suggestStickers", 0);
+@@ -1464,6 +1467,10 @@ public class SharedConfig {
+         LiteMode.toggleFlag(LiteMode.FLAG_CHAT_BLUR);
+     }
+ 
++    public static void setTabletSplitFraction(float value) {
++        tabletSplitFraction = Math.max(0.05f, Math.min(0.85f, value));
++    }
++
+     public static void toggleForceDisableTabletMode() {
+         forceDisableTabletMode = !forceDisableTabletMode;
+         SharedPreferences preferences = MessagesController.getGlobalMainSettings();
+diff --git a/TMessagesProj/src/main/java/org/telegram/ui/LaunchActivity.java b/TMessagesProj/src/main/java/org/telegram/ui/LaunchActivity.java
+index f59be1d0..acccbbd9 100644
+--- a/TMessagesProj/src/main/java/org/telegram/ui/LaunchActivity.java
++++ b/TMessagesProj/src/main/java/org/telegram/ui/LaunchActivity.java
+@@ -936,11 +936,53 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
+                 }
+ 
+                 private boolean inLayout;
++                private boolean draggingSplit;
+                 @Override
+                 public void requestLayout() {
+                     if (inLayout) return;
+                     super.requestLayout();
+                 }
++
++                @Override
++                public boolean onInterceptTouchEvent(MotionEvent ev) {
++                    if (tabletFullSize || rightActionBarLayout == null || rightActionBarLayout.getView().getVisibility() != View.VISIBLE) {
++                        return false;
++                    }
++                    if (ev.getActionMasked() == MotionEvent.ACTION_DOWN) {
++                        final int leftWidth = AndroidUtilities.getTabletLeftFragmentSize(getMeasuredWidth(), insets.left, insets.right);
++                        if (Math.abs(ev.getX() - leftWidth) <= AndroidUtilities.dp(24)) {
++                            draggingSplit = true;
++                            return true;
++                        }
++                    }
++                    return super.onInterceptTouchEvent(ev);
++                }
++
++                @Override
++                public boolean onTouchEvent(MotionEvent ev) {
++                    if (!draggingSplit) {
++                        return super.onTouchEvent(ev);
++                    }
++                    switch (ev.getActionMasked()) {
++                        case MotionEvent.ACTION_MOVE: {
++                            final int width = getMeasuredWidth();
++                            final int usable = Math.max(1, width - insets.left - insets.right);
++                            SharedConfig.setTabletSplitFraction((ev.getX() - insets.left) / (float) usable);
++                            requestLayout();
++                            invalidate();
++                            return true;
++                        }
++                        case MotionEvent.ACTION_UP:
++                        case MotionEvent.ACTION_CANCEL: {
++                            draggingSplit = false;
++                            SharedConfig.saveConfig();
++                            invalidate();
++                            return true;
++                        }
++                        default:
++                            return true;
++                    }
++                }
+                 @Override
+                 protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+                     inLayout = true;
+diff --git a/TMessagesProj_App/build.gradle b/TMessagesProj_App/build.gradle
+index e6c93e06..9b3f15a0 100644
+--- a/TMessagesProj_App/build.gradle
++++ b/TMessagesProj_App/build.gradle
+@@ -221,7 +221,7 @@ android {
+ 
+         afat {
+             ndk {
+-                abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
++                abiFilters "arm64-v8a"
+             }
+             sourceSets.debug {
+                 manifest.srcFile '../TMessagesProj/config/debug/AndroidManifest_SDK23.xml'
