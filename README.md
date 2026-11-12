@@ -1,3 +1,5 @@
+> **The ready-to-install build now lives in the full fork: https://github.com/svpak77/TelegramAndroid** (APK in Releases). This repository keeps only the standalone patch.
+
 # Foldable split view for Forkgram (Telegram Android)
 
 Draggable divider between the chat list and the chat pane on foldables and tablets.
